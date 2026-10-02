@@ -86,14 +86,44 @@ def fetch_weather(latitude: float, longitude: float) -> dict:
     today = data["forecast"]["forecastday"][0]
     day = today["day"]
 
+    # WeatherAPIのアイコンURLは "//cdn.weatherapi.com/..." という
+    # プロトコル相対URL。先頭に https: を足さないと画像が表示されない。
+    icon_url = _https(day["condition"]["icon"])
+
+    # --- 1時間ごとのデータ（24件）を整形する ---
+    # 必要な項目だけ抜き出して軽くする。生のhourは1件あたり
+    # 30項目以上あるので、そのまま返すと転送量が無駄に膨らむ。
+    hours = [
+        {
+            "time": h["time"][-5:],        # "2026-09-23 14:00" → "14:00"
+            "temp": h["temp_c"],
+            "icon": _https(h["condition"]["icon"]),
+            "weather": h["condition"]["text"],
+            "rain_prob": h["chance_of_rain"],
+        }
+        for h in today["hour"]
+    ]
+
+    # 現地の「今」が何時か。フロント側で現在時刻を強調するのに使う。
+    # 利用者の端末時計ではなく観測地点の時刻を使うのが正しい。
+    local_hour = int(data["location"]["localtime"][11:13])
+
     return {
         "date": today["date"],
         "weather": day["condition"]["text"],
+        "icon": icon_url,
         "temp_max": day["maxtemp_c"],
         "temp_min": day["mintemp_c"],
         "rain_prob": day["daily_chance_of_rain"],
         "temp_unit": "°C",
+        "hours": hours,
+        "local_hour": local_hour,
     }
+
+
+def _https(url: str) -> str:
+    """プロトコル相対URL（//から始まる）に https: を補う"""
+    return "https:" + url if url.startswith("//") else url
 
 
 # ============================================================
@@ -108,6 +138,12 @@ def show_weather(area_name: str, w: dict) -> None:
     print(f"  最高気温: {w['temp_max']}{w['temp_unit']}")
     print(f"  最低気温: {w['temp_min']}{w['temp_unit']}")
     print(f"  降水確率: {w['rain_prob']}%")
+    print("=" * 32)
+
+    # 3時間おきに抜粋して表示（24件は多すぎるため）
+    print("  【時間ごと】")
+    for h in w.get("hours", [])[::3]:
+        print(f"   {h['time']}  {h['temp']:>5}°C  {h['rain_prob']:>3}%  {h['weather']}")
     print("=" * 32)
 
 

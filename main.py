@@ -63,10 +63,22 @@ def _age_seconds(fetched_at: datetime) -> float:
     return (datetime.now(timezone.utc) - fetched_at).total_seconds()
 
 
+class HourItem(BaseModel):
+    """1時間ぶんのデータ。入れ子の構造も型で定義できる"""
+    time: str          # "14:00"
+    temp: float
+    icon: str = ""
+    weather: str = ""
+    rain_prob: int = 0
+
+
 class WeatherResponse(BaseModel):
     area: str
     date: str
     weather: str
+    icon: str = ""     # 天気アイコンの画像URL
+    hours: list[HourItem] = []   # 1時間ごと（24件）
+    local_hour: int = 0          # 観測地点の現在時刻（時）
     temp_max: float
     temp_min: float
     rain_prob: int
