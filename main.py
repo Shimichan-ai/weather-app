@@ -37,6 +37,7 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:5173",
         "http://localhost:3000",
+        "https://weather-front-orcin.vercel.app",  # ← 本番のフロント。消すと画面が動かなくなる
     ],
     allow_credentials=True,
     allow_methods=["*"],
