@@ -94,6 +94,9 @@ class WeatherResponse(BaseModel):
 
 class AreaListResponse(BaseModel):
     areas: list[str]
+    # 週間予報はフロントから直接Open-Meteoを叩くので、座標を渡す必要がある。
+    # 既存の areas はそのまま残すので、古いフロントも壊れない。
+    coords: dict[str, list[float]] = {}
 
 
 @app.get("/")
@@ -103,7 +106,11 @@ def read_root():
 
 @app.get("/areas", response_model=AreaListResponse)
 def get_areas():
-    return {"areas": list(AREAS.keys())}
+    """選択できる地域の一覧と座標を返す"""
+    return {
+        "areas": list(AREAS.keys()),
+        "coords": {name: [lat, lon] for name, (lat, lon) in AREAS.items()},
+    }
 
 
 @app.get("/weather", response_model=WeatherResponse)
