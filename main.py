@@ -19,10 +19,12 @@ v1からの変更点：
 from datetime import datetime, timezone
 
 import requests
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
+import auth
+import db
 from weather_app import AREAS, fetch_weather
 
 
@@ -198,3 +200,169 @@ def inspect_cache():
         }
         for area, v in _cache.items()
     }
+
+
+# ============================================================
+# ここから下：ユーザー登録・ログイン・お気に入り
+# ============================================================
+
+class Credentials(BaseModel):
+    email: str
+    password: str
+
+
+class TokenResponse(BaseModel):
+    token: str
+    email: str
+
+
+class MeResponse(BaseModel):
+    email: str
+
+
+class FavoritesResponse(BaseModel):
+    favorites: list[str]
+
+
+class AreaRequest(BaseModel):
+    area: str
+
+
+def current_user_id(authorization: str | None = Header(default=None)) -> int:
+    """リクエストのヘッダーからユーザーIDを取り出す。
+
+    Depends() に渡すと、この関数が先に実行される。
+    認証が必要なエンドポイントに1行足すだけで守れるようになる。
+
+    ヘッダーの形式: Authorization: Bearer <トークン>
+    """
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="ログインが必要です")
+
+    user_id = auth.user_id_from_token(authorization[7:])
+    if user_id is None:
+        raise HTTPException(status_code=401, detail="ログインの有効期限が切れました")
+    return user_id
+
+
+@app.post("/auth/register", response_model=TokenResponse)
+def register(body: Credentials):
+    """新規登録。成功するとそのままログイン状態になる"""
+    email = body.email.strip().lower()   # 大文字小文字の違いで別人にならないよう揃える
+
+    if "@" not in email or len(email) < 5:
+        raise HTTPException(status_code=400, detail="メールアドレスの形式が正しくありません")
+
+    problem = auth.check_password_rule(body.password)
+    if problem:
+        raise HTTPException(status_code=400, detail=problem)
+
+    # 生のパスワードはここで即座にハッシュ化する。変数に残さない
+    password_hash = auth.hash_password(body.password)
+
+    try:
+        with db.get_conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO users (email, password_hash) VALUES (%s, %s) RETURNING id",
+                (email, password_hash),
+            )
+            user_id = cur.fetchone()["id"]
+            conn.commit()
+    except Exception as e:
+        # UNIQUE制約に引っかかった＝すでに登録済み
+        if "unique" in str(e).lower() or "duplicate" in str(e).lower():
+            raise HTTPException(status_code=409, detail="このメールアドレスは登録済みです")
+        raise HTTPException(status_code=503, detail="データベースに接続できませんでした")
+
+    return {"token": auth.create_token(user_id), "email": email}
+
+
+@app.post("/auth/login", response_model=TokenResponse)
+def login(body: Credentials):
+    """ログイン。
+
+    注意: 失敗理由を「メールが無い」「パスワードが違う」と
+    分けて返してはいけない。どのメールが登録済みかを
+    外部から調べられてしまう。どちらも同じ文言にする。
+    """
+    email = body.email.strip().lower()
+
+    try:
+        with db.get_conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, password_hash FROM users WHERE email = %s", (email,)
+            )
+            row = cur.fetchone()
+    except Exception:
+        raise HTTPException(status_code=503, detail="データベースに接続できませんでした")
+
+    if row is None or not auth.verify_password(body.password, row["password_hash"]):
+        raise HTTPException(
+            status_code=401, detail="メールアドレスまたはパスワードが違います"
+        )
+
+    return {"token": auth.create_token(row["id"]), "email": email}
+
+
+@app.get("/auth/me", response_model=MeResponse)
+def me(user_id: int = Depends(current_user_id)):
+    """今ログインしているのが誰かを返す。トークンの有効確認にも使う"""
+    with db.get_conn() as conn, conn.cursor() as cur:
+        cur.execute("SELECT email FROM users WHERE id = %s", (user_id,))
+        row = cur.fetchone()
+    if row is None:
+        raise HTTPException(status_code=401, detail="ユーザーが見つかりません")
+    return {"email": row["email"]}
+
+
+@app.get("/favorites", response_model=FavoritesResponse)
+def list_favorites(user_id: int = Depends(current_user_id)):
+    """自分のお気に入り一覧。
+
+    WHERE user_id = %s を必ず付けること。
+    忘れると全員分が返り、他人のデータが見えてしまう。
+    """
+    with db.get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT area FROM favorites WHERE user_id = %s ORDER BY created_at",
+            (user_id,),
+        )
+        return {"favorites": [r["area"] for r in cur.fetchall()]}
+
+
+@app.post("/favorites", response_model=FavoritesResponse)
+def add_favorite(body: AreaRequest, user_id: int = Depends(current_user_id)):
+    """お気に入りに追加する"""
+    if body.area not in AREAS:
+        raise HTTPException(status_code=404, detail=f"地域「{body.area}」は登録されていません")
+
+    with db.get_conn() as conn, conn.cursor() as cur:
+        # 既に登録済みでもエラーにせず無視する。
+        # 二重クリックでエラーを見せる必要はない
+        cur.execute(
+            "INSERT INTO favorites (user_id, area) VALUES (%s, %s) "
+            "ON CONFLICT (user_id, area) DO NOTHING",
+            (user_id, body.area),
+        )
+        conn.commit()
+        cur.execute(
+            "SELECT area FROM favorites WHERE user_id = %s ORDER BY created_at",
+            (user_id,),
+        )
+        return {"favorites": [r["area"] for r in cur.fetchall()]}
+
+
+@app.delete("/favorites", response_model=FavoritesResponse)
+def remove_favorite(area: str, user_id: int = Depends(current_user_id)):
+    """お気に入りから外す"""
+    with db.get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            "DELETE FROM favorites WHERE user_id = %s AND area = %s",
+            (user_id, area),
+        )
+        conn.commit()
+        cur.execute(
+            "SELECT area FROM favorites WHERE user_id = %s ORDER BY created_at",
+            (user_id,),
+        )
+        return {"favorites": [r["area"] for r in cur.fetchall()]}
