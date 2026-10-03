@@ -98,7 +98,7 @@ def fetch_weather(latitude: float, longitude: float) -> dict:
             "time": h["time"][-5:],        # "2026-09-23 14:00" → "14:00"
             "temp": h["temp_c"],
             "icon": _https(h["condition"]["icon"]),
-            "icon_name": icon_name_for(h["condition"]["code"]),
+            "icon_name": icon_name_for(h["condition"]["code"], h["is_day"]),
             "weather": h["condition"]["text"],
             "rain_prob": h["chance_of_rain"],
         }
@@ -113,7 +113,8 @@ def fetch_weather(latitude: float, longitude: float) -> dict:
         "date": today["date"],
         "weather": day["condition"]["text"],
         "icon": icon_url,
-        "icon_name": icon_name_for(day["condition"]["code"]),
+        # 1日のまとめなので、昼の絵柄を使う
+        "icon_name": icon_name_for(day["condition"]["code"], 1),
         "temp_max": day["maxtemp_c"],
         "temp_min": day["mintemp_c"],
         "rain_prob": day["daily_chance_of_rain"],
@@ -159,9 +160,20 @@ _CODE_TO_ICON = {
 }
 
 
-def icon_name_for(code: int) -> str:
-    """未知のコードが来ても画面が壊れないよう cloudy を既定値にする"""
-    return _CODE_TO_ICON.get(code, "cloudy")
+# 夜用の絵柄があるのは、空そのものが見える天気だけ。
+# 雨や雪は昼夜で見た目を変える意味がないので用意しない。
+_HAS_NIGHT = {"clear", "partly-cloudy"}
+
+
+def icon_name_for(code: int, is_day: int = 1) -> str:
+    """天気コードとis_day(昼=1/夜=0)からアイコン名を決める。
+
+    未知のコードが来ても画面が壊れないよう cloudy を既定値にする。
+    """
+    name = _CODE_TO_ICON.get(code, "cloudy")
+    if not is_day and name in _HAS_NIGHT:
+        name += "-night"
+    return name
 
 
 # ============================================================
