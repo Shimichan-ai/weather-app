@@ -98,6 +98,7 @@ def fetch_weather(latitude: float, longitude: float) -> dict:
             "time": h["time"][-5:],        # "2026-09-23 14:00" → "14:00"
             "temp": h["temp_c"],
             "icon": _https(h["condition"]["icon"]),
+            "icon_name": icon_name_for(h["condition"]["code"]),
             "weather": h["condition"]["text"],
             "rain_prob": h["chance_of_rain"],
         }
@@ -112,6 +113,7 @@ def fetch_weather(latitude: float, longitude: float) -> dict:
         "date": today["date"],
         "weather": day["condition"]["text"],
         "icon": icon_url,
+        "icon_name": icon_name_for(day["condition"]["code"]),
         "temp_max": day["maxtemp_c"],
         "temp_min": day["mintemp_c"],
         "rain_prob": day["daily_chance_of_rain"],
@@ -124,6 +126,42 @@ def fetch_weather(latitude: float, longitude: float) -> dict:
 def _https(url: str) -> str:
     """プロトコル相対URL（//から始まる）に https: を補う"""
     return "https:" + url if url.startswith("//") else url
+
+
+# ============================================================
+# 天気コード → 自作アイコン名
+#   WeatherAPIは条件ごとに固有の番号(code)を返す。
+#   それを手持ちの11種類のアイコンに振り分ける。
+#
+#   提供元のアイコン画像をそのまま使わず自前に変換する理由:
+#     - 絵柄を統一できる
+#     - 提供元を乗り換えてもアイコン名は変わらない
+#       （次に入れる週間予報は別のAPIを使うが、同じ名前に揃えられる）
+# ============================================================
+_ICON_BY_CODE = {
+    "clear":         {1000},
+    "partly-cloudy": {1003},
+    "cloudy":        {1006, 1009},
+    "fog":           {1030, 1135, 1147},
+    "thunder":       {1087, 1273, 1276, 1279, 1282},
+    "drizzle":       {1150, 1153, 1168, 1171, 1180, 1183},
+    "rain":          {1186, 1189, 1198, 1201},
+    "heavy-rain":    {1192, 1195, 1246},
+    "showers":       {1063, 1240, 1243},
+    "snow":          {1066, 1069, 1072, 1204, 1207, 1210, 1213,
+                      1216, 1219, 1249, 1252, 1255, 1261},
+    "heavy-snow":    {1114, 1117, 1222, 1225, 1237, 1258, 1264},
+}
+
+# 探しやすいよう「コード → 名前」の向きに作り直しておく
+_CODE_TO_ICON = {
+    code: name for name, codes in _ICON_BY_CODE.items() for code in codes
+}
+
+
+def icon_name_for(code: int) -> str:
+    """未知のコードが来ても画面が壊れないよう cloudy を既定値にする"""
+    return _CODE_TO_ICON.get(code, "cloudy")
 
 
 # ============================================================
